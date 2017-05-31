@@ -1,13 +1,16 @@
 package com.outr.uberzip
 
 import java.io.File
-import java.util.concurrent.Executors
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.{ZipEntry, ZipFile}
 
 import org.powerscala.io._
 
-import scala.collection.JavaConversions._
+import scala.collection.JavaConverters._
+import scala.concurrent.{Await, Future, Promise}
+import scala.concurrent.duration._
+import scala.concurrent.ExecutionContext.Implicits.global
 
 object UberZip {
   def main(args: Array[String]): Unit = {
@@ -27,43 +30,65 @@ object UberZip {
         10
       }
       val zipFile = new File(args(0))
-      unzip(zipFile, new File(directory), threadCount)
-      println(s"Completed in ${(System.nanoTime() - start) / 1000000000.0f} seconds.")
+      val future = unzip(zipFile, new File(directory), threadCount)
+      val unzipped = Await.result(future, 1.hour)
+      println(s"Unzipped $unzipped entries in ${(System.nanoTime() - start) / 1000000000.0f} seconds.")
     }
   }
 
-  def unzip(file: File, directory: File, threadCount: Int): Unit = {
+  def unzip(file: File, directory: File, threadCount: Int): Future[Int] = {
     directory.mkdirs()
 
-    val executor = Executors.newFixedThreadPool(threadCount)
-
-    val counter = new AtomicInteger()
-
-    class UnzipWorker(zip: ZipFile, entry: ZipEntry, directory: File) extends Runnable {
-      override def run(): Unit = UberZip.unzip(zip, entry, directory)
-    }
+    val running = new AtomicInteger(0)
+    val counter = new AtomicInteger(0)
+    val tasks = new ConcurrentLinkedQueue[UnzipTask]
 
     val zip = new ZipFile(file)
-    zip.entries().foreach { entry =>
+    zip.entries().asScala.foreach { entry =>
       if (entry.getName.endsWith("/")) {
         // Create directory
         val dir = new File(directory, entry.getName)
         dir.mkdirs()
       } else {
+        tasks.add(new UnzipTask(zip, entry, directory))
         counter.incrementAndGet()
-        executor.submit(new UnzipWorker(zip, entry, directory))
+      }
+    }
+    val total = counter.get()
+    val promise = Promise[Int]
+    (0 until threadCount).foreach { _ =>
+      running.incrementAndGet()
+      unzipNext()
+    }
+
+    def unzipNext(): Unit = {
+      Option(tasks.poll()) match {
+        case Some(task) => {
+          val future = task.execute()
+          future.failed.foreach { throwable =>
+            new RuntimeException(s"Error extracting ${task.entry.getName}", throwable)
+          }
+          future.onComplete { _ =>
+            counter.decrementAndGet()
+            unzipNext()
+          }
+        }
+        case None => if (running.decrementAndGet() == 0) {
+          promise.success(total)
+        }
       }
     }
 
-    while (counter.get() > 0) {
-      Thread.sleep(10)
-    }
-    executor.shutdown()
+    promise.future
   }
 
-  def unzip(zip: ZipFile, entry: ZipEntry, directory: File): Unit = {
+  def unzip(zip: ZipFile, entry: ZipEntry, directory: File): Future[Unit] = Future {
     val output = new File(directory, entry.getName)
     val input = zip.getInputStream(entry)
     IO.stream(input, output)
   }
+}
+
+class UnzipTask(zip: ZipFile, val entry: ZipEntry, directory: File) {
+  def execute(): Future[Unit] = UberZip.unzip(zip, entry, directory)
 }
