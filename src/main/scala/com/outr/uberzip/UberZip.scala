@@ -13,6 +13,8 @@ import scala.concurrent.duration._
 import scala.concurrent.ExecutionContext.Implicits.global
 
 object UberZip {
+  var DefaultThreadCount = 10
+
   def main(args: Array[String]): Unit = {
     if (args.length == 0 || "/?".equals(args(0))) {
       println("Usage:")
@@ -27,7 +29,7 @@ object UberZip {
       val threadCount = if (args.length > 2) {
         args(2).toInt
       } else {
-        10
+        DefaultThreadCount
       }
       val zipFile = new File(args(0))
       val future = unzip(zipFile, new File(directory), threadCount)
@@ -36,7 +38,7 @@ object UberZip {
     }
   }
 
-  def unzip(file: File, directory: File, threadCount: Int): Future[Int] = {
+  def unzip(file: File, directory: File, threadCount: Int = DefaultThreadCount): Future[Int] = {
     directory.mkdirs()
 
     val running = new AtomicInteger(0)
@@ -82,7 +84,7 @@ object UberZip {
     promise.future
   }
 
-  def unzip(zip: ZipFile, entry: ZipEntry, directory: File): Future[Unit] = Future {
+  def unzipFile(zip: ZipFile, entry: ZipEntry, directory: File): Future[Unit] = Future {
     val output = new File(directory, entry.getName)
     val input = zip.getInputStream(entry)
     IO.stream(input, output)
@@ -90,5 +92,5 @@ object UberZip {
 }
 
 class UnzipTask(zip: ZipFile, val entry: ZipEntry, directory: File) {
-  def execute(): Future[Unit] = UberZip.unzip(zip, entry, directory)
+  def execute(): Future[Unit] = UberZip.unzipFile(zip, entry, directory)
 }
