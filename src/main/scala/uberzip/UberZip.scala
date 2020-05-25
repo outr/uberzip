@@ -1,21 +1,22 @@
-package com.outr.uberzip
+package uberzip
 
 import java.io.File
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.{ZipEntry, ZipFile}
 
-import org.powerscala.io._
+import io.youi.stream._
 
-import scala.collection.JavaConverters._
-import scala.concurrent.{Await, Future, Promise}
+import scala.concurrent.{Await, ExecutionContext, Future, Promise}
 import scala.concurrent.duration._
-import scala.concurrent.ExecutionContext.Implicits.global
+import scala.jdk.CollectionConverters._
 
 object UberZip {
   var DefaultThreadCount = 10
 
   def main(args: Array[String]): Unit = {
+    implicit val ec: ExecutionContext = ExecutionContext.global
+
     if (args.length == 0 || "/?".equals(args(0))) {
       println("Usage:")
       println("\tuberzip [zipfile] {output directory} {thread-count}")
@@ -38,7 +39,8 @@ object UberZip {
     }
   }
 
-  def unzip(file: File, directory: File, threadCount: Int = DefaultThreadCount): Future[Int] = {
+  def unzip(file: File, directory: File, threadCount: Int = DefaultThreadCount)
+           (implicit ec: ExecutionContext): Future[Int] = {
     directory.mkdirs()
 
     val running = new AtomicInteger(0)
@@ -84,13 +86,10 @@ object UberZip {
     promise.future
   }
 
-  def unzipFile(zip: ZipFile, entry: ZipEntry, directory: File): Future[Unit] = Future {
+  def unzipFile(zip: ZipFile, entry: ZipEntry, directory: File)
+               (implicit ec: ExecutionContext): Future[Unit] = Future {
     val output = new File(directory, entry.getName)
     val input = zip.getInputStream(entry)
     IO.stream(input, output)
   }
-}
-
-class UnzipTask(zip: ZipFile, val entry: ZipEntry, directory: File) {
-  def execute(): Future[Unit] = UberZip.unzipFile(zip, entry, directory)
 }
